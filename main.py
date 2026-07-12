@@ -1,9 +1,9 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
+import os
 import requests
 import trafilatura
 from urllib.parse import urlparse, unquote
-
 
 app = FastAPI(title="BURYA Website Extractor API")
 
@@ -19,8 +19,7 @@ def home():
     }
 
 
-def get_page(url: str):
-
+def create_session(use_proxy=False):
     session = requests.Session()
 
     session.headers.update({
@@ -42,15 +41,47 @@ def get_page(url: str):
         )
     })
 
+    if use_proxy:
+        proxy = os.getenv("SOCKS_PROXY")
+
+        if proxy:
+            session.proxies = {
+                "http": proxy,
+                "https": proxy
+            }
+
+    return session
+
+
+def get_page(url: str):
+
+    # First attempt (normal)
+    session = create_session(False)
+
     response = session.get(
         url,
-        timeout=30
+        timeout=30,
+        allow_redirects=True
     )
+
+    # Retry with SOCKS proxy if forbidden
+    if response.status_code == 403:
+
+        proxy = os.getenv("SOCKS_PROXY")
+
+        if proxy:
+
+            session = create_session(True)
+
+            response = session.get(
+                url,
+                timeout=30,
+                allow_redirects=True
+            )
 
     response.raise_for_status()
 
     return response.text
-
 
 
 def extract_wikipedia_section(text: str, url: str):
@@ -63,23 +94,18 @@ def extract_wikipedia_section(text: str, url: str):
     ):
         return text
 
-
     section = unquote(
         parsed.fragment
     ).replace("_", " ").lower()
-
 
     text = text.replace(
         "[edit]",
         ""
     )
 
-
     lines = text.splitlines()
 
-
     start = None
-
 
     for i, line in enumerate(lines):
 
@@ -88,19 +114,14 @@ def extract_wikipedia_section(text: str, url: str):
             start = i
             break
 
-
     if start is None:
-
         return text
 
-
     result = []
-
 
     for line in lines[start:]:
 
         clean = line.strip()
-
 
         if (
             clean
@@ -110,12 +131,9 @@ def extract_wikipedia_section(text: str, url: str):
         ):
             break
 
-
         result.append(line)
 
-
     return "\n".join(result)
-
 
 
 @app.post("/extract")
@@ -127,18 +145,15 @@ def extract(request: ExtractRequest):
             request.url
         )
 
-
         metadata = trafilatura.extract_metadata(
             downloaded
         )
-
 
         text = trafilatura.extract(
             downloaded,
             include_links=False,
             include_tables=True
         )
-
 
         if not text:
 
@@ -148,19 +163,15 @@ def extract(request: ExtractRequest):
                 "error": "No readable content found."
             }
 
-
-        # Wikipedia section filtering
         text = extract_wikipedia_section(
             text,
             request.url
         )
 
-
         title = None
 
         if metadata:
             title = metadata.title
-
 
         return {
             "success": True,
@@ -168,7 +179,6 @@ def extract(request: ExtractRequest):
             "title": title,
             "content": text
         }
-
 
     except Exception as e:
 

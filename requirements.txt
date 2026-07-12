@@ -1,5 +1,5 @@
 fastapi
 uvicorn
 trafilatura
-requests
-beautifulsoup4
+requests[socks]
+pydantic
